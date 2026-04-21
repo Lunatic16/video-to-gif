@@ -13,6 +13,7 @@
 #   -w, --width PX          Output width in pixels (default: 480, -1 = auto)
 #   -l, --loop N            Loop count: 0=infinite, 1=once, etc. (default: 0)
 #   -q, --quality LEVEL     Quality: low | medium | high (default: medium)
+#       --stats-mode MODE   Palette stats mode: diff | full (default: diff)
 #   -c, --crop WxH+X+Y      Crop region before scaling (e.g. 640x360+0+60)
 #   -S, --speed FACTOR      Playback speed multiplier (e.g. 2.0 = 2× faster)
 #   -R, --reverse           Reverse the GIF (boomerang effect)
@@ -38,6 +39,7 @@ FPS=15
 WIDTH=480
 LOOP=0
 QUALITY="medium"
+STATS_MODE="diff"
 START=""
 DURATION=""
 OUTPUT=""
@@ -73,9 +75,10 @@ usage() {
 }
 
 # ── Cleanup trap (palette + any partial output) ───────────────────────────────
-PALETTE=""
+TMP_DIR=$(mktemp -d)
+PALETTE="${TMP_DIR}/palette.png"
 cleanup() {
-  [[ -n "$PALETTE" && -f "$PALETTE" ]] && rm -f "$PALETTE"
+  rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT INT TERM
 
@@ -89,6 +92,7 @@ while [[ $# -gt 0 ]]; do
     -w|--width)     WIDTH="$2";    shift 2 ;;
     -l|--loop)      LOOP="$2";     shift 2 ;;
     -q|--quality)   QUALITY="$2";  shift 2 ;;
+       --stats-mode) STATS_MODE="$2"; shift 2 ;;
     -c|--crop)      CROP="$2";     shift 2 ;;
     -S|--speed)     SPEED="$2";    shift 2 ;;
     -R|--reverse)   REVERSE=true;  shift   ;;
@@ -105,6 +109,9 @@ done
 # ── Validate input file ───────────────────────────────────────────────────────
 [[ -z "$INPUT" ]] && error "No input file specified. Run with --help for usage."
 [[ -f "$INPUT" ]] || error "Input file not found: $INPUT"
+if ! ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 "$INPUT" | grep -q "video"; then
+  error "Input file does not contain a valid video stream: $INPUT"
+fi
 
 # ── Check FFmpeg / ffprobe ────────────────────────────────────────────────────
 if ! command -v ffmpeg &>/dev/null; then
@@ -124,15 +131,8 @@ if [[ -n "$FFMPEG_VERSION" ]]; then
   fi
 fi
 
-# ── Numeric argument validation ───────────────────────────────────────────────
-[[ "$FPS"  =~ ^[0-9]+$          ]] || error "--fps must be a positive integer (got: $FPS)"
-[[ "$LOOP" =~ ^[0-9]+$          ]] || error "--loop must be a non-negative integer (got: $LOOP)"
-[[ "$WIDTH" =~ ^-?[0-9]+$       ]] || error "--width must be an integer or -1 for auto (got: $WIDTH)"
-if [[ -n "$SPEED" ]]; then
-  [[ "$SPEED" =~ ^[0-9]*\.?[0-9]+$ ]] || error "--speed must be a positive number (got: $SPEED)"
-fi
-if [[ -n "$DURATION" ]]; then
-  [[ "$DURATION" =~ ^[0-9]*\.?[0-9]+$ ]] || error "--duration must be a positive number in seconds (got: $DURATION)"
+if [[ -n "$CROP" ]]; then
+  [[ "$CROP" =~ ^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+$ ]] || error "--crop format must be WxH+X+Y (got: $CROP)"
 fi
 
 # ── Parse --max-size into bytes ───────────────────────────────────────────────
@@ -262,12 +262,12 @@ do_convert() {
   # Rebuild VF with potentially adjusted fps/width for auto-resize loop
   vf=$(WIDTH="$width" build_vf)
 
-  PALETTE=$(mktemp /tmp/palette_XXXXXX.png)
+  PALETTE="${TMP_DIR}/palette_${RANDOM}.png"
 
-  info "Step 1/2 — Generating optimized color palette  (fps=${fps}, width=${width}px)..."
+  info "Step 1/2 — Generating optimized color palette  (fps=${fps}, width=${width}px, mode=${STATS_MODE})..."
   # shellcheck disable=SC2086
   run_ffmpeg -v warning $TIME_FLAGS -i "$INPUT" \
-    -vf "${vf},palettegen=max_colors=${MAX_COLORS}:stats_mode=diff" \
+    -vf "${vf},palettegen=max_colors=${MAX_COLORS}:stats_mode=${STATS_MODE}" \
     -y "$PALETTE"
   [[ "$DRY_RUN" == false ]] && success "Palette created."
 
