@@ -12,8 +12,9 @@ A lightweight shell-based utility designed to transform video files into high-qu
 
 ## Tech Stack
 
-- **Language**: POSIX-compliant shell script
-- **Primary Tool**: FFmpeg / ffprobe
+- **Primary Language**: Rust (performance, safety, and cross-platform reliability)
+- **Wrapper Script**: POSIX-compliant shell script (legacy/alternative)
+- **Core Utility**: FFmpeg / ffprobe
 
 ## Prerequisites
 
@@ -23,17 +24,23 @@ A lightweight shell-based utility designed to transform video files into high-qu
   - Fedora: `sudo dnf install ffmpeg`
   - Windows: [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
 
-## Getting Started
+## Building and Running (Rust)
 
-### 1. Make the script executable
+The project is a standard Rust application managed by `cargo`.
+
+- **Development Build**: `cargo build`
+- **Release Build**: `cargo build --release`
+- **Run**: `cargo run -- [OPTIONS] <input_file>`
+
+### Usage
+
+```bash
+./video_to_gif [OPTIONS] <input_file>
+```
+or
 
 ```bash
 chmod +x video_to_gif.sh
-```
-
-### 2. Usage
-
-```bash
 ./video_to_gif.sh [OPTIONS] <input_file>
 ```
 
