@@ -24,22 +24,36 @@ A lightweight shell-based utility designed to transform video files into high-qu
   - Fedora: `sudo dnf install ffmpeg`
   - Windows: [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
 
-## Building and Running (Rust)
+## Getting Started
 
-The project is a standard Rust application managed by `cargo`.
-
-- **Development Build**: `cargo build`
-- **Release Build**: `cargo build --release`
-- **Run**: `cargo run -- [OPTIONS] <input_file>`
-
-### Usage
+### 1. Clone the Repository
 
 ```bash
-./video_to_gif [OPTIONS] <input_file>
+git clone https://github.com/your-username/video-to-gif.git
+cd video-to-gif
 ```
-or
+
+### 2. Build the Project
+
+Ensure you have Rust installed (via [rustup](https://rustup.rs/)).
 
 ```bash
+# Development Build
+cargo build
+
+# Release Build (recommended for performance)
+cargo build --release
+```
+
+## Usage
+
+You can use the compiled binary directly or the provided shell script wrapper.
+
+```bash
+# Using cargo
+cargo run -- [OPTIONS] <input_file>
+
+# Using the shell wrapper
 chmod +x video_to_gif.sh
 ./video_to_gif.sh [OPTIONS] <input_file>
 ```
@@ -66,6 +80,16 @@ chmod +x video_to_gif.sh
 | `-h, --help` | Show help message | - |
 
 ## Architecture
+
+### Directory Structure
+
+```
+├── src/
+│   └── main.rs       # Core logic, CLI parsing, and FFmpeg orchestration
+├── video_to_gif.sh   # Legacy shell wrapper
+├── Cargo.toml        # Dependencies and release optimizations
+└── README.md         # This file
+```
 
 ### Request Lifecycle
 
