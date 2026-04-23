@@ -45,11 +45,11 @@ set -euo pipefail
 
 shopt -s nullglob 2>/dev/null || true
 
-# ── Config file path ──────────────────────────────────────────────────────────
+# -- Config file path ----------------------------------------------------------
 CONFIG_DIR="${HOME}/.config/video_to_gif"
 CONFIG_FILE="${CONFIG_DIR}/config"
 
-# ── Defaults ──────────────────────────────────────────────────────────────────
+# -- Defaults ------------------------------------------------------------------
 FPS=15
 WIDTH=480
 LOOP=0
@@ -71,7 +71,7 @@ DRY_RUN=false
 INTERRUPTED=false
 INPUTS=()
 
-# ── Colors ────────────────────────────────────────────────────────────────────
+# -- Colors --------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -80,20 +80,20 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-# ── Helper functions ──────────────────────────────────────────────────────────
+# -- Helper functions ----------------------------------------------------------
 info() { echo -e "${CYAN}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[OK]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 progress() { echo -e "${DIM}[PROGRESS]${NC} $*"; }
 
-# ── Config file loading ─────────────────────────────────────────────────────
+# -- Config file loading -----------------------------------------------------
 load_config() {
 	if [[ -f "$CONFIG_FILE" ]]; then
 		while IFS='=' read -r key value; do
 			[[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
 			key=$(echo "$key" | tr -d '[:space:]')
-			value=$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["\']//' -e 's/["\']$//')
+			value=$(echo "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*//' -e $'s/^["\']]//' -e $'s/["\']$//')
 			case "$key" in
 				fps) FPS="$value" ;;
 				width) WIDTH="$value" ;;
@@ -107,13 +107,17 @@ load_config() {
 	fi
 }
 
-# ── FFmpeg capability detection ─────────────────────────────────────────────
+# -- FFmpeg capability detection ---------------------------------------------
 detect_ffmpeg_caps() {
 	local caps_file="${TMP_DIR}/ffmpeg_caps.txt"
 	FFMPEG_HAS_LANCZOS=false
 	FFMPEG_HAS_PALETTEGEN=false
 	FFMPEG_HAS_PALETTEUSE=false
 	FFMPEG_HAS_PROGRESS=false
+	FFMPEG_HAS_SETPTS=false
+	FFMPEG_HAS_REVERSE=false
+	FFMPEG_HAS_PALETTE_BASE=false
+	FFMPEG_HAS_GIF_ENCODER=false
 
 	if ffmpeg -hide_banner -filters 2>/dev/null > "$caps_file"; then
 		grep -q "lanczos" "$caps_file" && FFMPEG_HAS_LANCZOS=true
@@ -134,11 +138,12 @@ detect_ffmpeg_caps() {
 		FFMPEG_HAS_PROGRESS=true
 	fi
 
-	# Validate palette filters by trying to list them
-	if ffmpeg -hide_banner -filters 2>/dev/null | grep -q "palettegen"; then
+	# Validate palette filters
+	ffmpeg -filters > "${TMP_DIR}/filters.txt" 2>&1
+	if grep -q "palettegen" "${TMP_DIR}/filters.txt"; then
 		FFMPEG_HAS_PALETTEGEN=true
 	fi
-	if ffmpeg -hide_banner -filters 2>/dev/null | grep -q "paletteuse"; then
+	if grep -q "paletteuse" "${TMP_DIR}/filters.txt"; then
 		FFMPEG_HAS_PALETTEUSE=true
 	fi
 
@@ -150,7 +155,7 @@ detect_ffmpeg_caps() {
 	fi
 }
 
-# ── Input validation ─────────────────────────────────────────────────────────
+# -- Input validation ---------------------------------------------------------
 validate_inputs() {
 	local input="$1"
 
@@ -168,16 +173,21 @@ validate_inputs() {
 	local filesize
 	filesize=$(stat -c%s "$input" 2>/dev/null || stat -f%z "$input" 2>/dev/null || echo 0)
 	if [[ $filesize -gt 524288000 ]]; then
-		warn "Large input ($(numfmt --to=iec "$filesize" 2>/dev/null || echo "${filesize} bytes"))"
+		warn "Large input file detected"
 		info "Consider using -d to limit duration or -w to reduce width"
 	fi
 }
 
-# ── Validate speed value ─────────────────────────────────────────────────────
+# -- Validate speed value -----------------------------------------------------
 validate_speed() {
 	if [[ -n "$SPEED" ]]; then
-		if ! [[ "$SPEED" =~ ^[0-9]+\.?[0-9]*$ ]] || [[ $(echo "$SPEED == 0" | bc 2>/dev/null || echo "0") -eq 1 ]]; then
-			error "--speed must be a positive number (got: $SPEED)"
+		if ! [[ "$SPEED" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+			error "--speed must be a positive number. got: $SPEED"
+		fi
+		local speed_zero
+		speed_zero=$(echo "$SPEED == 0" | bc 2>/dev/null) || speed_zero="0"
+		if [[ "$speed_zero" -eq 1 ]]; then
+			error "--speed must be a positive number. got: $SPEED"
 		fi
 	fi
 }
@@ -187,9 +197,8 @@ usage() {
 	exit 0
 }
 
-# ── Cleanup trap setup ────────────────────────────────────────────────────────
+# -- Cleanup trap setup --------------------------------------------------------
 TMP_DIR=$(mktemp -d)
-PALETTE="${TMP_DIR}/palette.png"
 PROGRESS_PIPE="${TMP_DIR}/progress_pipe"
 
 cleanup() {
@@ -208,10 +217,10 @@ trap cleanup EXIT
 
 trap interrupt_handler INT TERM
 
-# ── Load config before parsing args ───────────────────────────────────────────
+# -- Load config before parsing args -------------------------------------------
 load_config
 
-# ── Argument parsing ────────────────────────────────────────────────────────────
+# -- Argument parsing ------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		-o|--output) OUTPUT="$2"; shift 2 ;;
@@ -239,7 +248,7 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-# ── Check for FFmpeg / ffprobe ──────────────────────────────────────────────────
+# -- Check for FFmpeg / ffprobe --------------------------------------------------
 if ! command -v ffmpeg &>/dev/null; then
 	error "FFmpeg not installed.\n macOS: brew install ffmpeg\n Ubuntu: sudo apt install ffmpeg"
 fi
@@ -247,7 +256,7 @@ if ! command -v ffprobe &>/dev/null; then
 	error "ffprobe not found. Ships with FFmpeg - reinstall FFmpeg."
 fi
 
-# ── FFmpeg version check ────────────────────────────────────────────────────────
+# -- FFmpeg version check --------------------------------------------------------
 FFMPEG_VERSION=$(ffmpeg -version 2>&1 | head -1 | { grep -oE '[0-9]+\.[0-9]+' || true; } | head -1)
 if [[ -n "$FFMPEG_VERSION" ]]; then
 	FFMPEG_MAJOR=$(echo "$FFMPEG_VERSION" | cut -d. -f1)
@@ -257,18 +266,18 @@ if [[ -n "$FFMPEG_VERSION" ]]; then
 	fi
 fi
 
-# ── Detect FFmpeg capabilities ─────────────────────────────────────────────────
+# -- Detect FFmpeg capabilities -------------------------------------------------
 detect_ffmpeg_caps
 
-# ── Check for gifsicle if optimization requested ───────────────────────────────
+# -- Check for gifsicle if optimization requested -------------------------------
 if [[ "$OPTIMIZE" == true ]] && ! command -v gifsicle &>/dev/null; then
 	warn "gifsicle not found. Install for better optimization."
 	OPTIMIZE=false
 fi
 
-# ── Input validation ───────────────────────────────────────────────────────────
+# -- Input validation -----------------------------------------------------------
 if [[ ${#INPUTS[@]} -eq 0 ]]; then
-	error "No input file(s) specified. Run with --help for usage."
+	error "No input files specified. Run with --help for usage."
 fi
 
 for input in "${INPUTS[@]}"; do
@@ -276,26 +285,26 @@ for input in "${INPUTS[@]}"; do
 done
 validate_speed
 
-# ── Crop validation ───────────────────────────────────────────────────────────
+# -- Crop validation -----------------------------------------------------------
 if [[ -n "$CROP" ]]; then
-	[[ "$CROP" =~ ^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+$ ]] || error "--crop format must be WxH+X+Y (got: $CROP)"
+	[[ "$CROP" =~ ^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+$ ]] || error "crop format must be WxH+X+Y. got: ${CROP}"
 fi
 
-# ── Parse max-size into bytes ───────────────────────────────────────────────────
+# -- Parse max-size into bytes ---------------------------------------------------
 MAX_BYTES=0
 if [[ -n "$MAX_SIZE" ]]; then
 	SUFFIX="${MAX_SIZE: -1}"
 	NUM="${MAX_SIZE%?}"
-	[[ "$NUM" =~ ^[0-9]+$ ]] || error "--max-size format: number followed by K, M, or G (e.g. 5M)"
+	[[ "$NUM" =~ ^[0-9]+$ ]] || error "max-size format: number followed by K, M, or G. example: 5M"
 	case "${SUFFIX^^}" in
 		K) MAX_BYTES=$(( NUM * 1024 )) ;;
 		M) MAX_BYTES=$(( NUM * 1024 * 1024 )) ;;
 		G) MAX_BYTES=$(( NUM * 1024 * 1024 * 1024 )) ;;
-		*) error "--max-size suffix must be K, M, or G (got: $SUFFIX)" ;;
+		*) error "max-size suffix must be K, M, or G. got: ${SUFFIX}" ;;
 	esac
 fi
 
-# ── Quality to palette settings ─────────────────────────────────────────────────
+# -- Quality to palette settings -------------------------------------------------
 get_quality_settings() {
 	local q="$1"
 	case "$q" in
@@ -306,7 +315,7 @@ get_quality_settings() {
 	esac
 }
 
-# ── Build video filter chain ───────────────────────────────────────────────────
+# -- Build video filter chain ---------------------------------------------------
 build_vf() {
 	local width="${1:-$WIDTH}"
 	local filters=()
@@ -343,7 +352,7 @@ build_vf() {
 	echo "${filters[*]}"
 }
 
-# ── Progress display handler ───────────────────────────────────────────────────
+# -- Progress display handler ---------------------------------------------------
 show_progress() {
 	local mode="$1"
 	local duration="$2"
@@ -387,7 +396,7 @@ show_progress() {
 	fi
 }
 
-# ── FFmpeg runner with progress ─────────────────────────────────────────────────
+# -- FFmpeg runner with progress -------------------------------------------------
 run_ffmpeg_with_progress() {
 	local duration="${1:-}"
 	shift
@@ -422,7 +431,7 @@ run_ffmpeg_with_progress() {
 	fi
 }
 
-# ── Core conversion function ────────────────────────────────────────────────────
+# -- Core conversion function ----------------------------------------------------
 do_convert() {
 	local input="$1"
 	local output="$2"
@@ -435,11 +444,9 @@ do_convert() {
 	q_colors=$(echo "$q_data" | cut -d' ' -f1)
 	q_dither=$(echo "$q_data" | cut -d' ' -f2)
 
-	local vf time_flags
-	vf=$(build_vf "$width")
-	time_flags=""
-	[[ -n "$START" ]] && time_flags="-ss $START"
-	[[ -n "$DURATION" ]] && time_flags="$time_flags -t $DURATION"
+	local time_array=()
+	[[ -n "$START" ]] && time_array+=(-ss "$START")
+	[[ -n "$DURATION" ]] && time_array+=(-t "$DURATION")
 
 	# Calculate expected duration for progress
 	local expected_duration="$DURATION"
@@ -449,7 +456,8 @@ do_convert() {
 		expected_duration=${expected_duration%.*}
 	fi
 
-	local pal_file="${TMP_DIR}/palette_$(date +%s)_${RANDOM}.png"
+	local pal_file
+	pal_file="${TMP_DIR}/palette_$(date +%s)_${RANDOM}.png"
 
 	info "Generating palette ($q_setting: ${q_colors} colors)..."
 
@@ -459,8 +467,10 @@ do_convert() {
 		mem_flags+=("-max_muxing_queue_size" "9999")
 	fi
 
+	local vf
+	vf=$(build_vf "$width")
+
 	local pal_args
-	IFS=' ' read -r -a time_array <<< "$time_flags"
 	pal_args=(
 		ffmpeg -v warning -hide_banner
 		"${time_array[@]}"
@@ -495,12 +505,7 @@ do_convert() {
 		echo -e "${YELLOW}[DRY-RUN]${NC} ${render_args[*]}"
 	else
 		if [[ "$PROGRESS_MODE" != "none" ]]; then
-			# Progress output handling
-			local progress_file="${TMP_DIR}/ffmpeg_progress"
-			mkfifo "$progress_file" 2>/dev/null || true
-			"${render_args[@]}" 2>&1 | while IFS= read -r line; do
-				echo "$line"
-				done
+			"${render_args[@]}" 2>&1 | show_progress "$PROGRESS_MODE" "$expected_duration" "$output"
 		else
 			"${render_args[@]}"
 		fi
@@ -524,7 +529,7 @@ do_convert() {
 	fi
 }
 
-# ── Comparison mode ─────────────────────────────────────────────────────────────
+# -- Comparison mode -------------------------------------------------------------
 do_compare() {
 	local input="$1"
 	local baseout dir name
@@ -553,10 +558,9 @@ do_compare() {
 	done
 }
 
-# ── Preview mode ────────────────────────────────────────────────────────────────
+# -- Preview mode ----------------------------------------------------------------
 do_preview() {
 	local input="$1"
-	local output_spec="2"
 	local preview_file
 
 	if [[ -n "$OUTPUT" ]]; then
@@ -600,7 +604,7 @@ do_preview() {
 	fi
 }
 
-# ── Auto-resize loop for --max-size ─────────────────────────────────────────────
+# -- Auto-resize loop for --max-size ---------------------------------------------
 do_with_resize() {
 	local input="$1"
 	local output="$2"
@@ -645,7 +649,7 @@ do_with_resize() {
 	done
 }
 
-# ── Process single file ──────────────────────────────────────────────────────────
+# -- Process single file ----------------------------------------------------------
 process_file() {
 	local input="$1"
 	local output="$OUTPUT"
@@ -664,9 +668,9 @@ process_file() {
 
 	# Header per file
 	echo ""
-	echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+	echo -e "${BOLD}--------------------------------------------------${NC}"
 	echo -e "${BOLD} Video → GIF${NC}"
-	echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+	echo -e "${BOLD}--------------------------------------------------${NC}"
 	echo ""
 	info "Input: $input"
 	info "Output: $output"
@@ -678,7 +682,7 @@ process_file() {
 	[[ -n "$DURATION" ]] && info "Duration: ${DURATION}s"
 	[[ -n "$MAX_SIZE" ]] && info "Max size: $MAX_SIZE"
 	[[ "$OPTIMIZE" == true ]] && info "Optimization: gifsicle"
-	[[ "$DRY_RUN" == true ]] && warn "Dry-run mode — no files written"
+	[[ "$DRY_RUN" == true ]] && warn "Dry-run mode - no files written"
 	echo ""
 
 	# Route to appropriate mode
@@ -697,31 +701,27 @@ process_file() {
 		echo ""
 		success "Dry-run complete"
 	else
-		case true in
-			"$PREVIEW")
-				# Already reported in do_preview
-				;;
-			"$COMPARE")
-				# Already reported in do_compare
-				;;
-			*)
-				if [[ -f "$output" ]]; then
-					local size dims
-					size=$(du -sh "$output" | cut -f1)
-					dims=$(ffprobe -v error -select_streams v:0 \
-						-show_entries stream=width,height -of csv=p=0 "$output" 2>/dev/null || echo "unknown")
-					echo ""
-					success "GIF created: $output"
-					echo -e " ${BOLD}Size:${NC} $size"
-					echo -e " ${BOLD}Dimensions:${NC} ${dims/,/×} px"
-					echo ""
-				fi
-				;;
-		esac
+		if [[ "$PREVIEW" == true ]]; then
+			: # Already reported in do_preview
+		elif [[ "$COMPARE" == true ]]; then
+			: # Already reported in do_compare
+		else
+			if [[ -f "$output" ]]; then
+				local size dims
+				size=$(du -sh "$output" | cut -f1)
+				dims=$(ffprobe -v error -select_streams v:0 \
+					-show_entries stream=width,height -of csv=p=0 "$output" 2>/dev/null || echo "unknown")
+				echo ""
+				success "GIF created: $output"
+				echo -e " ${BOLD}Size:${NC} $size"
+				echo -e " ${BOLD}Dimensions:${NC} ${dims/,/×} px"
+				echo ""
+			fi
+		fi
 	fi
 }
 
-# ── Main: process all inputs ─────────────────────────────────────────────────────
+# -- Main: process all inputs -----------------------------------------------------
 for input in "${INPUTS[@]}"; do
 	process_file "$input"
 done
